@@ -1,7 +1,7 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
-from handlers.prologue import send_prologue, skip_prologue
+from handlers.prologue import send_prologue, skip_prologue, prologue_next  # ← добавил prologue_next
 from core import config
 from core.db import init_db, create_player
 
@@ -20,5 +20,6 @@ async def start(update: Update, context):
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(skip_prologue, pattern="^skip_prologue$"))
+app.add_handler(CallbackQueryHandler(prologue_next, pattern="^prologue_next$"))  # ← теперь работает
 
 app.run_polling()
