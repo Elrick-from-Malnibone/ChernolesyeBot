@@ -39,11 +39,9 @@ async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=next_keyboard,
                 parse_mode='Markdown'
             )
+            # Ждём нажатия "Далее" через callback
 
-            # Ждём нажатия кнопки "Далее"
-            # Это обрабатывается в callback-обработчике prologue_next
-
-    # После пролога — выбор пути
+    # Выбор пути
     choice_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌿 К болоту", callback_data="go_left")],
         [InlineKeyboardButton("⛰️ К скалам", callback_data="go_right")]
