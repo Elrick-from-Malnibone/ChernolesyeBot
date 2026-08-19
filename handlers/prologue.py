@@ -14,12 +14,19 @@ async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message_id = update.message.message_id
 
-    # Кнопка "Пропустить"
+    # 1. Отправляем картинку (если есть)
+    try:
+        with open("images/prologue.jpg", "rb") as f:
+            await context.bot.send_photo(chat_id=chat_id, photo=f)
+    except:
+        pass
+
+    # 2. Кнопка "Пропустить"
     skip_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_prologue")]
     ])
 
-    # Отправляем первый черновик
+    # 3. Отправляем черновик и постепенно обновляем
     await context.bot._post(
         "sendMessageDraft",
         {
@@ -35,7 +42,7 @@ async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for part in PROLOGUE_PARTS:
         full_text += part + "\n\n"
-        
+
         await context.bot._post(
             "sendMessageDraft",
             {
@@ -46,8 +53,8 @@ async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "reply_markup": skip_keyboard.to_json()
             }
         )
-        
-        await asyncio.sleep(2)  # пауза, чтобы стриминг выглядел как живой
+
+        await asyncio.sleep(3)  # пауза 3 секунды между частями
 
     # Убираем кнопку в конце
     await context.bot.edit_message_reply_markup(
@@ -66,7 +73,6 @@ async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     full_text = "\n\n".join(PROLOGUE_PARTS)
 
-    # Отправляем весь текст сразу
     await context.bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
