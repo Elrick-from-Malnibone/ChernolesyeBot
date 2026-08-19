@@ -1,6 +1,7 @@
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 
 PROLOGUE_PARTS = [
     """Сквозь прутья своей клетки ты видишь покидающую деревню процессию. Возглавляет ее сам Рунмабур — повелитель Гномов Болотища. Облаченный в кольчужную рубаху, с рогатым шлемом на голове и огромным боевым топором в руках, он, несмотря на свой маленький рост, являет собой весьма внушительное зрелище. Следом стройными рядами шествуют ратники — свирепые, вооруженные сверкающими бердышами бородатые крепыши. Колонну лучников замыкают трубачи. Звуки бравурной музыки наполняют воздух — все свидетельствует о том, что обитатели Болотища готовятся выступить в боевой поход против своего извечного врага — Гномов Каменного Моста. Где именно произойдет решающая битва, тебе не ведомо.""",
@@ -10,57 +11,95 @@ PROLOGUE_PARTS = [
     """Ты понимаешь, что у тебя появился шанс! Если только тебе удастся бежать, пробраться в Чернолесье и, незаметно следуя за гномьей ратью, разузнать, где именно состоятся переговоры вождей. Тогда во время встречи, когда короля не будет окружать многочисленная стража, ты сможешь попытаться убить ненавистного Рунмабура, одним ударом отомстив и ему, и всем гномам Болотища."""
 ]
 
+
+def _get_keyboard(part_index: int) -> InlineKeyboardMarkup:
+    buttons = []
+    if part_index < len(PROLOGUE_PARTS) - 1:
+        buttons.append(InlineKeyboardButton("▶️ Далее", callback_data="next_prologue"))
+    buttons.append(InlineKeyboardButton("⏭ Пропустить", callback_data="skip_prologue"))
+    return InlineKeyboardMarkup([buttons])
+
+
+async def _stream_text(bot, chat_id: int, message_id: int, text: str, delay: float = 0.03):
+    """Печатает текст по словам (эффект печатной машинки)."""
+    words = text.split(" ")
+    current = ""
+    for i, word in enumerate(words):
+        current += word + (" " if i < len(words) - 1 else "")
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=current or "…"
+            )
+        except BadRequest as e:
+            # Игнорируем "message is not modified" и подобные
+            if "not modified" not in str(e).lower():
+                raise
+        await asyncio.sleep(delay)
+
+
 async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    message_id = update.message.message_id
 
-    # 1. Отправляем картинку (если есть)
+    # 1. Картинка (один раз)
     try:
         with open("images/prologue.jpg", "rb") as f:
             await context.bot.send_photo(chat_id=chat_id, photo=f)
-    except:
-        pass
+    except Exception:
+        pass  # если файла нет — просто пропускаем
 
-    # 2. Кнопка "Пропустить"
-    skip_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_prologue")]
-    ])
+    # 2. Начальное сообщение (будет редактироваться)
+    msg = await context.bot.send_message(chat_id=chat_id, text="…")
 
-    # 3. Отправляем черновик и постепенно обновляем
-    await context.bot._post(
-        "sendMessageDraft",
-        {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "draft_id": message_id,
-            "text": "⚔️ Пролог...",
-            "reply_markup": skip_keyboard.to_json()
-        }
+    # Сохраняем состояние
+    context.user_data["prologue_msg_id"] = msg.message_id
+    context.user_data["prologue_part"] = 0
+
+    # 3. Печатаем первую часть
+    await _stream_text(context.bot, chat_id, msg.message_id, PROLOGUE_PARTS[0])
+
+    # 4. Добавляем кнопки
+    await context.bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=msg.message_id,
+        text=PROLOGUE_PARTS[0],
+        reply_markup=_get_keyboard(0)
     )
 
-    full_text = ""
 
-    for part in PROLOGUE_PARTS:
-        full_text += part + "\n\n"
+async def next_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        await context.bot._post(
-            "sendMessageDraft",
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "draft_id": message_id,
-                "text": full_text[:4096],
-                "reply_markup": skip_keyboard.to_json()
-            }
+    chat_id = query.message.chat.id
+    message_id = context.user_data.get("prologue_msg_id") or query.message.message_id
+    part = context.user_data.get("prologue_part", 0) + 1
+
+    if part >= len(PROLOGUE_PARTS):
+        return
+
+    context.user_data["prologue_part"] = part
+
+    # Очищаем текст и убираем кнопки
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text="…"
         )
+    except BadRequest:
+        pass
 
-        await asyncio.sleep(3)  # пауза 3 секунды между частями
+    # Печатаем новую часть
+    await _stream_text(context.bot, chat_id, message_id, PROLOGUE_PARTS[part])
 
-    # Убираем кнопку в конце
-    await context.bot.edit_message_reply_markup(
+    # Ставим кнопки
+    await context.bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
-        reply_markup=None
+        text=PROLOGUE_PARTS[part],
+        reply_markup=_get_keyboard(part)
     )
 
 
@@ -69,7 +108,7 @@ async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     chat_id = query.message.chat.id
-    message_id = query.message.message_id
+    message_id = context.user_data.get("prologue_msg_id") or query.message.message_id
 
     full_text = "\n\n".join(PROLOGUE_PARTS)
 
@@ -79,3 +118,6 @@ async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=full_text,
         reply_markup=None
     )
+
+    # Здесь можешь сразу запускать следующую часть игры
+    # await start_game(update, context)
