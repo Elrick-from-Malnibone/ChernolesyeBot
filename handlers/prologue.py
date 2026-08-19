@@ -1,7 +1,9 @@
 import asyncio
+from pathlib import Path
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter, TelegramError
 
 PROLOGUE_PARTS = [
     """Сквозь прутья своей клетки ты видишь покидающую деревню процессию. Возглавляет ее сам Рунмабур — повелитель Гномов Болотища. Облаченный в кольчужную рубаху, с рогатым шлемом на голове и огромным боевым топором в руках, он, несмотря на свой маленький рост, являет собой весьма внушительное зрелище. Следом стройными рядами шествуют ратники — свирепые, вооруженные сверкающими бердышами бородатые крепыши. Колонну лучников замыкают трубачи. Звуки бравурной музыки наполняют воздух — все свидетельствует о том, что обитатели Болотища готовятся выступить в боевой поход против своего извечного врага — Гномов Каменного Моста. Где именно произойдет решающая битва, тебе не ведомо.""",
@@ -20,46 +22,92 @@ def _get_keyboard(part_index: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([buttons])
 
 
-async def _stream_text(bot, chat_id: int, message_id: int, text: str, delay: float = 0.03):
-    """Печатает текст по словам (эффект печатной машинки)."""
-    words = text.split(" ")
+async def _stream_text(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    chars_per_edit: int = 2,      # сколько букв за одну правку
+    delay: float = 0.04,          # пауза между правками
+):
+    """Печать по буквам с защитой от rate-limit Telegram."""
     current = ""
-    for i, word in enumerate(words):
-        current += word + (" " if i < len(words) - 1 else "")
+    i = 0
+    n = len(text)
+
+    while i < n:
+        # добавляем несколько символов за раз
+        end = min(i + chars_per_edit, n)
+        current = text[:end]
+        i = end
+
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=current or "…"
+                text=current if current else "…"
             )
+        except RetryAfter as e:
+            # Telegram сказал подождать — ждём и продолжаем
+            await asyncio.sleep(e.retry_after + 0.1)
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=current if current else "…"
+                )
+            except BadRequest:
+                pass
         except BadRequest as e:
-            # Игнорируем "message is not modified" и подобные
-            if "not modified" not in str(e).lower():
-                raise
+            msg = str(e).lower()
+            if "not modified" in msg or "message to edit not found" in msg:
+                pass
+            else:
+                # на всякий случай не роняем стрим
+                await asyncio.sleep(0.3)
+        except TelegramError:
+            await asyncio.sleep(0.5)
+
         await asyncio.sleep(delay)
+
+    # финальный текст (на случай, если последняя правка не прошла)
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text
+        )
+    except BadRequest:
+        pass
 
 
 async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # 1. Картинка (один раз)
-    try:
-        with open("images/prologue.jpg", "rb") as f:
-            await context.bot.send_photo(chat_id=chat_id, photo=f)
-    except Exception:
-        pass  # если файла нет — просто пропускаем
+    # --- Картинка ---
+    # папка image в корне проекта, файл prologue.jpg
+    image_path = Path(__file__).resolve().parent.parent / "image" / "prologue.jpg"
+    # если handlers лежит глубже, подстрой путь; либо жёстко:
+    # image_path = Path("image/prologue.jpg")
 
-    # 2. Начальное сообщение (будет редактироваться)
+    if image_path.exists():
+        with open(image_path, "rb") as f:
+            await context.bot.send_photo(chat_id=chat_id, photo=f)
+    else:
+        # чтобы сразу увидеть, что путь неверный
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ Картинка не найдена:\n{image_path}"
+        )
+
+    # стартовое сообщение
     msg = await context.bot.send_message(chat_id=chat_id, text="…")
 
-    # Сохраняем состояние
     context.user_data["prologue_msg_id"] = msg.message_id
     context.user_data["prologue_part"] = 0
 
-    # 3. Печатаем первую часть
     await _stream_text(context.bot, chat_id, msg.message_id, PROLOGUE_PARTS[0])
 
-    # 4. Добавляем кнопки
     await context.bot.edit_message_text(
         chat_id=chat_id,
         message_id=msg.message_id,
@@ -81,7 +129,6 @@ async def next_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["prologue_part"] = part
 
-    # Очищаем текст и убираем кнопки
     try:
         await context.bot.edit_message_text(
             chat_id=chat_id,
@@ -91,10 +138,8 @@ async def next_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         pass
 
-    # Печатаем новую часть
     await _stream_text(context.bot, chat_id, message_id, PROLOGUE_PARTS[part])
 
-    # Ставим кнопки
     await context.bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
@@ -118,6 +163,3 @@ async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=full_text,
         reply_markup=None
     )
-
-    # Здесь можешь сразу запускать следующую часть игры
-    # await start_game(update, context)
