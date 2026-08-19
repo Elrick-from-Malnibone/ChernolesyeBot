@@ -1,2 +1,7 @@
-TG_TOKEN = "8922347108:AAGRyTq07Fx5cn_tqDIGlHoq8q1e58YpeVU"
-OWNER_ID = 1328634636  # твой ID
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TG_TOKEN = os.getenv("TG_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
