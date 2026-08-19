@@ -39,19 +39,6 @@ async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=next_keyboard,
                 parse_mode='Markdown'
             )
-            # Ждём нажатия "Далее" через callback
-
-    # Выбор пути
-    choice_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌿 К болоту", callback_data="go_left")],
-        [InlineKeyboardButton("⛰️ К скалам", callback_data="go_right")]
-    ])
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Куда ты направишься?",
-        reply_markup=choice_keyboard
-    )
 
 
 async def prologue_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
