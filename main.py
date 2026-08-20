@@ -22,4 +22,5 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(next_prologue, pattern="^next_prologue$"))
 app.add_handler(CallbackQueryHandler(skip_prologue, pattern="^skip_prologue$"))
 
+
 app.run_polling()
