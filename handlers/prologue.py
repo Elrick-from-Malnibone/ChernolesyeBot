@@ -52,7 +52,7 @@ async def _safe_edit(bot, chat_id: int, message_id: int, text: str, reply_markup
         return False
 
 
-async def _stream_chunks(bot, chat_id: int, message_id: int, text: str, chunk_size: int = 40, delay: float = 0.12):
+async def _stream_chunks(bot, chat_id: int, message_id: int, text: str, chunk_size: int = 25, delay: float = 0.1):
     """Печать кусками — стабильно, без флуда."""
     for i in range(chunk_size, len(text) + 1, chunk_size):
         ok = await _safe_edit(bot, chat_id, message_id, text[:i])
