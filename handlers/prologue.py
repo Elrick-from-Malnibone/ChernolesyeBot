@@ -6,8 +6,9 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 
+PROLOGUE_HEADER = "📖 <b>ПРОЛОГ</b>\n\n"
+
 PROLOGUE_PARTS = [
-    """ПРОЛОГ"""
     """Сквозь прутья своей клетки ты видишь покидающую деревню процессию. Возглавляет ее сам Рунмабур — повелитель Гномов Болотища. Облаченный в кольчужную рубаху, с рогатым шлемом на голове и огромным боевым топором в руках, он, несмотря на свой маленький рост, являет собой весьма внушительное зрелище. Следом стройными рядами шествуют ратники — свирепые, вооруженные сверкающими бердышами бородатые крепыши. Колонну лучников замыкают трубачи. Звуки бравурной музыки наполняют воздух — все свидетельствует о том, что обитатели Болотища готовятся выступить в боевой поход против своего извечного врага — Гномов Каменного Моста. Где именно произойдет решающая битва, тебе не ведомо.""",
     """Для многих поколений обитателей Аллансии ужасное Чернолесье, метко прозванное в народе Проклятым Лесом, олицетворяет собой квинтэссенцию абсолютного зла. В его мрачных чащобах, куда не проникает солнечный свет, вынашивают свои злобные замыслы тысячи и тысячи мерзких чудовищ, имени и названия которых нет ни в одном из ныне существующих языков. Дикие звери и орки, гоблины и тролли, великаны, ведьмы и ужасные умертвия нашли себе надежное пристанище под его покровом. И нечего удивляться тому, что путешественники и торговые караваны, следующие из дальних южных земель, предпочитают полный опасностей окольный путь, чреватый потерей трех-четырех дней и возможной встречей с бесчинствующими в этих краях многочисленными разбойничьими шайками, печальной перспективе провести хотя бы одну ночь в этой адской чаще, откуда, как гласит людская молва, нет дороги назад.""",
     """Что касается тебя, то давно уже нет у тебя иного желания, как, невзирая ни на что, вернуться под густые своды Чернолесья. Ибо ты — еще в младенчестве был похищен у любящей матери злокозненным повелителем Гномов Болотища королем Рунмабуром. Запертый в клетке, третируемый наподобие дикого зверя, ты стойко претерпевал жестокие издевательства и безмолвно сносил бесконечные унижения. Ты мечтал лишь об одном — вернуться в Проклятый Лес. Бежать, скрыться от проклятых Гномов и злобного Рунмабура, бежать... и отомстить!""",
@@ -17,16 +18,13 @@ PROLOGUE_PARTS = [
 
 
 def _keyboard(part: int) -> InlineKeyboardMarkup:
-    """Кнопки под текущую часть пролога."""
     last = len(PROLOGUE_PARTS) - 1
 
     if part >= last:
-        # последняя часть — только «Начать игру»
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🎮 Начать игру", callback_data="start_game")]
         ])
 
-    # не последняя — Далее + Пропустить
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("▶️ Далее", callback_data="next_prologue"),
@@ -42,6 +40,7 @@ async def _safe_edit(bot, chat_id: int, message_id: int, text: str, reply_markup
             message_id=message_id,
             text=text,
             reply_markup=reply_markup,
+            parse_mode="HTML",
         )
         return True
     except RetryAfter as e:
@@ -52,6 +51,7 @@ async def _safe_edit(bot, chat_id: int, message_id: int, text: str, reply_markup
                 message_id=message_id,
                 text=text,
                 reply_markup=reply_markup,
+                parse_mode="HTML",
             )
             return True
         except Exception:
@@ -72,11 +72,6 @@ async def _stream_chunks(
     max_edits: int = 14,
     delay: float = 0.22,
 ):
-    """
-    Медленная печать кусками.
-    Число правок ограничено — Telegram не режет длинные части.
-    В конце всегда полный текст.
-    """
     if not text:
         return
 
@@ -90,7 +85,6 @@ async def _stream_chunks(
         await asyncio.sleep(delay)
         pos += chunk_size
 
-    # гарантия полного текста
     await _safe_edit(bot, chat_id, message_id, text)
 
 
@@ -101,7 +95,8 @@ async def _show_part(
     context: ContextTypes.DEFAULT_TYPE,
     old_msg_id: int | None = None,
 ):
-    text = PROLOGUE_PARTS[part]
+    body = PROLOGUE_PARTS[part]
+    text = PROLOGUE_HEADER + body
 
     if old_msg_id:
         try:
@@ -109,7 +104,11 @@ async def _show_part(
         except BadRequest:
             pass
 
-    msg = await bot.send_message(chat_id=chat_id, text="…")
+    msg = await bot.send_message(
+        chat_id=chat_id,
+        text="📖 <b>ПРОЛОГ</b>\n\n…",
+        parse_mode="HTML",
+    )
     context.user_data["prologue_msg_id"] = msg.message_id
     context.user_data["prologue_part"] = part
 
@@ -128,7 +127,6 @@ async def _show_part(
 async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # image/prologue.jpg относительно корня запуска
     img = Path("image/prologue.jpg")
     if not img.exists():
         img = Path(__file__).resolve().parent.parent / "image" / "prologue.jpg"
@@ -164,44 +162,36 @@ async def next_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать весь пролог сразу и кнопку «Начать игру»."""
     query = update.callback_query
     await query.answer()
 
     chat_id = query.message.chat.id
     mid = context.user_data.get("prologue_msg_id") or query.message.message_id
-    full = "\n\n".join(PROLOGUE_PARTS)
+    full = PROLOGUE_HEADER + "\n\n".join(PROLOGUE_PARTS)
 
     context.user_data["prologue_part"] = len(PROLOGUE_PARTS) - 1
 
-    ok = await _safe_edit(
-        context.bot,
-        chat_id,
-        mid,
-        full,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎮 Начать игру", callback_data="start_game")]
-        ]),
-    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎮 Начать игру", callback_data="start_game")]
+    ])
+
+    ok = await _safe_edit(context.bot, chat_id, mid, full, reply_markup=keyboard)
     if not ok:
         await context.bot.send_message(
             chat_id,
             full,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎮 Начать игру", callback_data="start_game")]
-            ]),
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
 
 
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Заглушка — сюда потом подключишь реальный старт игры."""
     query = update.callback_query
     await query.answer()
 
     chat_id = query.message.chat.id
     mid = context.user_data.get("prologue_msg_id") or query.message.message_id
 
-    # убираем кнопки
     try:
         await context.bot.edit_message_reply_markup(
             chat_id=chat_id,

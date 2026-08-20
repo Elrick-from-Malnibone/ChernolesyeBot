@@ -1,7 +1,7 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
-from handlers.prologue import send_prologue, next_prologue, skip_prologue
+from handlers.prologue import send_prologue, next_prologue, skip_prologue, start_game
 from core import config
 from core.db import init_db, create_player
 
@@ -21,6 +21,7 @@ async def start(update: Update, context):
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(next_prologue, pattern="^next_prologue$"))
 app.add_handler(CallbackQueryHandler(skip_prologue, pattern="^skip_prologue$"))
+app.add_handler(CallbackQueryHandler(start_game, pattern="^start_game$"))
 
 
 app.run_polling()
