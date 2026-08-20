@@ -27,58 +27,71 @@ async def _stream_text(
     chat_id: int,
     message_id: int,
     text: str,
-    chars_per_edit: int = 2,      # сколько букв за одну правку
-    delay: float = 0.04,          # пауза между правками
+    cps: float = 35.0,        # символов в секунду (подкрути)
+    min_interval: float = 0.08,  # минимальный интервал между edit
 ):
-    """Печать по буквам с защитой от rate-limit Telegram."""
-    current = ""
-    i = 0
-    n = len(text)
+    """
+    Плавная печать по времени, а не «edit на каждую букву».
+    cps — скорость, min_interval — защита от rate-limit.
+    """
+    if not text:
+        return
 
-    while i < n:
-        # добавляем несколько символов за раз
-        end = min(i + chars_per_edit, n)
-        current = text[:end]
-        i = end
+    start = asyncio.get_event_loop().time()
+    last_shown = ""
+    last_edit = 0.0
 
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=current if current else "…"
-            )
-        except RetryAfter as e:
-            # Telegram сказал подождать — ждём и продолжаем
-            await asyncio.sleep(e.retry_after + 0.1)
+    while True:
+        now = asyncio.get_event_loop().time()
+        elapsed = now - start
+        # сколько символов «должно» быть видно к этому моменту
+        n = min(len(text), int(elapsed * cps) + 1)
+        current = text[:n]
+
+        # правим только если текст изменился И прошло достаточно времени
+        if current != last_shown and (now - last_edit) >= min_interval:
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text=current if current else "…"
+                    text=current
                 )
-            except BadRequest:
-                pass
-        except BadRequest as e:
-            msg = str(e).lower()
-            if "not modified" in msg or "message to edit not found" in msg:
-                pass
-            else:
-                # на всякий случай не роняем стрим
+                last_shown = current
+                last_edit = now
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after) + 0.05)
+                # после ожидания догоняем сразу до нужной позиции
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=current
+                    )
+                    last_shown = current
+                    last_edit = asyncio.get_event_loop().time()
+                except BadRequest:
+                    pass
+            except BadRequest as e:
+                if "not modified" not in str(e).lower():
+                    await asyncio.sleep(0.2)
+            except TelegramError:
                 await asyncio.sleep(0.3)
-        except TelegramError:
-            await asyncio.sleep(0.5)
 
-        await asyncio.sleep(delay)
+        if n >= len(text):
+            break
 
-    # финальный текст (на случай, если последняя правка не прошла)
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text
-        )
-    except BadRequest:
-        pass
+        await asyncio.sleep(0.02)  # лёгкий тик цикла
+
+    # гарантируем финальный полный текст
+    if last_shown != text:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text
+            )
+        except BadRequest:
+            pass
 
 
 async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
