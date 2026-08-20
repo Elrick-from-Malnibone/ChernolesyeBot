@@ -3,7 +3,7 @@ from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, TelegramError
 
 PROLOGUE_PARTS = [
     """Сквозь прутья своей клетки ты видишь покидающую деревню процессию. Возглавляет ее сам Рунмабур — повелитель Гномов Болотища. Облаченный в кольчужную рубаху, с рогатым шлемом на голове и огромным боевым топором в руках, он, несмотря на свой маленький рост, являет собой весьма внушительное зрелище. Следом стройными рядами шествуют ратники — свирепые, вооруженные сверкающими бердышами бородатые крепыши. Колонну лучников замыкают трубачи. Звуки бравурной музыки наполняют воздух — все свидетельствует о том, что обитатели Болотища готовятся выступить в боевой поход против своего извечного врага — Гномов Каменного Моста. Где именно произойдет решающая битва, тебе не ведомо.""",
@@ -14,151 +14,88 @@ PROLOGUE_PARTS = [
 ]
 
 
-def _get_keyboard(part_index: int) -> InlineKeyboardMarkup:
-    buttons = []
-    if part_index < len(PROLOGUE_PARTS) - 1:
-        buttons.append(InlineKeyboardButton("▶️ Далее", callback_data="next_prologue"))
-    buttons.append(InlineKeyboardButton("⏭ Пропустить", callback_data="skip_prologue"))
-    return InlineKeyboardMarkup([buttons])
+def _keyboard(part: int) -> InlineKeyboardMarkup:
+    row = []
+    if part < len(PROLOGUE_PARTS) - 1:
+        row.append(InlineKeyboardButton("▶️ Далее", callback_data="next_prologue"))
+    row.append(InlineKeyboardButton("⏭ Пропустить", callback_data="skip_prologue"))
+    return InlineKeyboardMarkup([row])
 
 
-async def _stream_text(
-    bot,
-    chat_id: int,
-    message_id: int,
-    text: str,
-    cps: float = 20.0,        # символов в секунду (подкрути)
-    min_interval: float = 0.1,  # минимальный интервал между edit
-):
-    """
-    Плавная печать по времени, а не «edit на каждую букву».
-    cps — скорость, min_interval — защита от rate-limit.
-    """
-    if not text:
-        return
-
+async def _stream_draft(bot, chat_id: int, draft_id: int, text: str, cps: float = 40.0):
+    """Стрим через draft. Без постоянного edit обычного сообщения."""
     start = asyncio.get_event_loop().time()
-    last_shown = ""
-    last_edit = 0.0
+    last = ""
 
     while True:
-        now = asyncio.get_event_loop().time()
-        elapsed = now - start
-        # сколько символов «должно» быть видно к этому моменту
-        n = min(len(text), int(elapsed * cps) + 1)
-        current = text[:n]
-
-        # правим только если текст изменился И прошло достаточно времени
-        if current != last_shown and (now - last_edit) >= min_interval:
+        n = min(len(text), int((asyncio.get_event_loop().time() - start) * cps) + 1)
+        chunk = text[:n]
+        if chunk != last:
             try:
-                await bot.edit_message_text(
+                await bot.send_message_draft(
                     chat_id=chat_id,
-                    message_id=message_id,
-                    text=current
+                    draft_id=draft_id,
+                    text=chunk or "…",
                 )
-                last_shown = current
-                last_edit = now
-            except RetryAfter as e:
-                await asyncio.sleep(float(e.retry_after) + 0.05)
-                # после ожидания догоняем сразу до нужной позиции
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=current
-                    )
-                    last_shown = current
-                    last_edit = asyncio.get_event_loop().time()
-                except BadRequest:
-                    pass
-            except BadRequest as e:
-                if "not modified" not in str(e).lower():
-                    await asyncio.sleep(0.2)
+                last = chunk
             except TelegramError:
-                await asyncio.sleep(0.3)
-
+                # нет поддержки / ошибка — выходим, покажем текст целиком ниже
+                return False
         if n >= len(text):
             break
+        await asyncio.sleep(0.05)
+    return True
 
-        await asyncio.sleep(0.02)  # лёгкий тик цикла
 
-    # гарантируем финальный полный текст
-    if last_shown != text:
+async def _show_part(bot, chat_id: int, part: int, context: ContextTypes.DEFAULT_TYPE, old_msg_id: int | None = None):
+    text = PROLOGUE_PARTS[part]
+    draft_id = chat_id  # любой ненулевой int, стабильный на пользователя
+
+    # стрим черновиком
+    ok = await _stream_draft(bot, chat_id, draft_id, text, cps=45)
+
+    # убрать старое сообщение с прошлой частью
+    if old_msg_id:
         try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text
-            )
+            await bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
         except BadRequest:
             pass
+
+    # финальное сообщение (draft сам исчезнет)
+    msg = await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=_keyboard(part),
+    )
+    context.user_data["prologue_msg_id"] = msg.message_id
+    context.user_data["prologue_part"] = part
+    return msg
 
 
 async def send_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # --- Картинка ---
-    # папка image в корне проекта, файл prologue.jpg
-    image_path = Path(__file__).resolve().parent.parent / "image" / "prologue.jpg"
-    # если handlers лежит глубже, подстрой путь; либо жёстко:
-    # image_path = Path("image/prologue.jpg")
-
-    if image_path.exists():
-        with open(image_path, "rb") as f:
+    # картинка: папка image в корне
+    img = Path("image/prologue.jpg")
+    if img.exists():
+        with open(img, "rb") as f:
             await context.bot.send_photo(chat_id=chat_id, photo=f)
     else:
-        # чтобы сразу увидеть, что путь неверный
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"⚠️ Картинка не найдена:\n{image_path}"
-        )
+        await context.bot.send_message(chat_id, f"⚠️ нет файла: {img.resolve()}")
 
-    # стартовое сообщение
-    msg = await context.bot.send_message(chat_id=chat_id, text="…")
-
-    context.user_data["prologue_msg_id"] = msg.message_id
-    context.user_data["prologue_part"] = 0
-
-    await _stream_text(context.bot, chat_id, msg.message_id, PROLOGUE_PARTS[0])
-
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=msg.message_id,
-        text=PROLOGUE_PARTS[0],
-        reply_markup=_get_keyboard(0)
-    )
+    await _show_part(context.bot, chat_id, 0, context)
 
 
 async def next_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    chat_id = query.message.chat.id
-    message_id = context.user_data.get("prologue_msg_id") or query.message.message_id
     part = context.user_data.get("prologue_part", 0) + 1
-
     if part >= len(PROLOGUE_PARTS):
         return
 
-    context.user_data["prologue_part"] = part
-
-    try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text="…"
-        )
-    except BadRequest:
-        pass
-
-    await _stream_text(context.bot, chat_id, message_id, PROLOGUE_PARTS[part])
-
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=PROLOGUE_PARTS[part],
-        reply_markup=_get_keyboard(part)
-    )
+    old_id = context.user_data.get("prologue_msg_id")
+    await _show_part(context.bot, query.message.chat.id, part, context, old_msg_id=old_id)
 
 
 async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,13 +103,15 @@ async def skip_prologue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     chat_id = query.message.chat.id
-    message_id = context.user_data.get("prologue_msg_id") or query.message.message_id
+    mid = context.user_data.get("prologue_msg_id") or query.message.message_id
+    full = "\n\n".join(PROLOGUE_PARTS)
 
-    full_text = "\n\n".join(PROLOGUE_PARTS)
-
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=full_text,
-        reply_markup=None
-    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=mid,
+            text=full,
+            reply_markup=None,
+        )
+    except BadRequest:
+        await context.bot.send_message(chat_id, full)
