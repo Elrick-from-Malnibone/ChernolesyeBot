@@ -27,8 +27,8 @@ async def _stream_text(
     chat_id: int,
     message_id: int,
     text: str,
-    cps: float = 35.0,        # символов в секунду (подкрути)
-    min_interval: float = 0.08,  # минимальный интервал между edit
+    cps: float = 20.0,        # символов в секунду (подкрути)
+    min_interval: float = 0.1,  # минимальный интервал между edit
 ):
     """
     Плавная печать по времени, а не «edit на каждую букву».
